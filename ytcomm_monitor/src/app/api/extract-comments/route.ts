@@ -70,22 +70,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    let buffer = "";
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split("\n");
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      
+      // Keep the last incomplete line in buffer
+      buffer = lines.pop() || "";
 
       for (const line of lines) {
+        if (!line.trim()) continue;
+        
         if (line.startsWith("data: ")) {
           try {
-            const event = JSON.parse(line.slice(6));
+            const dataStr = line.slice(6).trim();
+            if (!dataStr) continue;
+            
+            const event = JSON.parse(dataStr);
+
+            console.log("Event received:", event.type, event.status);
 
             // Check for errors
             if (event.status === "error" || event.type === "ERROR") {
               const errorMsg =
                 event.message || event.error || "Unknown error from Mino AI";
+              console.error("Mino AI error:", errorMsg);
               return NextResponse.json(
                 { detail: String(errorMsg) },
                 { status: 500 }
@@ -94,7 +107,19 @@ export async function POST(request: NextRequest) {
 
             // Check for completion
             if (event.type === "COMPLETE" && event.status === "COMPLETED") {
-              const resultJson = event.resultJson || {};
+              let resultJson = event.resultJson || {};
+              
+              // If resultJson is a string, try to parse it
+              if (typeof resultJson === "string") {
+                try {
+                  resultJson = JSON.parse(resultJson);
+                } catch (e) {
+                  console.error("Failed to parse resultJson string:", e);
+                }
+              }
+
+              console.log("Result JSON type:", typeof resultJson);
+              console.log("Result JSON:", JSON.stringify(resultJson).substring(0, 500));
 
               // Handle different response formats
               if (Array.isArray(resultJson)) {
@@ -106,11 +131,26 @@ export async function POST(request: NextRequest) {
               ) {
                 return NextResponse.json(resultJson);
               } else if (resultJson && typeof resultJson === "object") {
-                const comments = resultJson.comments || [];
+                // Try to find comments in nested structure
+                const comments = 
+                  resultJson.comments || 
+                  (Array.isArray(resultJson) ? resultJson : []);
                 return NextResponse.json({
                   comments: Array.isArray(comments) ? comments : [],
                 });
               } else {
+                // Last resort: try to extract from any top-level array
+                const keys = Object.keys(resultJson || {});
+                for (const key of keys) {
+                  const value = resultJson[key];
+                  if (Array.isArray(value) && value.length > 0) {
+                    // Check if it looks like comments (has objects with text/username)
+                    if (value[0] && typeof value[0] === "object") {
+                      return NextResponse.json({ comments: value });
+                    }
+                  }
+                }
+                console.log("No comments found in result:", resultJson);
                 return NextResponse.json({ comments: [] });
               }
             }

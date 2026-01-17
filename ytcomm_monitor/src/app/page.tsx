@@ -27,10 +27,29 @@ export default function Home() {
 
       if (res.ok) {
         const data = await res.json();
-        if (data.comments && data.comments.length > 0) {
+        console.log("API Response:", data); // Debug log
+        console.log("Comments:", data.comments); // Debug log
+
+        if (
+          data.comments &&
+          Array.isArray(data.comments) &&
+          data.comments.length > 0
+        ) {
           setComments(data.comments);
         } else {
-          setError("No comments found. Try a different video.");
+          // Check if there's any data at all
+          const hasAnyData = data && Object.keys(data).length > 0;
+          if (hasAnyData) {
+            console.warn("Unexpected response format:", data);
+            setError(
+              `No comments found. Response: ${JSON.stringify(data).substring(
+                0,
+                200
+              )}`
+            );
+          } else {
+            setError("No comments found. Try a different video.");
+          }
           setComments([]);
         }
       } else {
