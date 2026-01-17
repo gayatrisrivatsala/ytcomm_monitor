@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+export const maxDuration = 120; // 2 minutes for Vercel Pro, 10s for Hobby
+
+export async function GET() {
+  return NextResponse.json({ message: "API route is working", status: "ok" });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();

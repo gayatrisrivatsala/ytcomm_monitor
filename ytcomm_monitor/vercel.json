@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "src/app/api/extract-comments/route.ts": {
+      "maxDuration": 120
+    }
+  }
+}
