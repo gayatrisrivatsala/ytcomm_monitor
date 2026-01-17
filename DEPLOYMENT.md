@@ -1,11 +1,11 @@
 # Deployment Guide
 
-## 🔐 Securing Your API Key
+## Securing Your API Key
 
 ### Step 1: Create Environment Files
 
 **For Python API Server (muc_yt folder):**
-1. Create `.env` file in `muc_yt/` folder (already created, but check it exists)
+1. Create `.env` file in `muc_yt/` folder 
 2. Add your API key:
    ```
    MINO_API_KEY=your_api_key_here
@@ -23,13 +23,13 @@
 
 ### Step 2: Verify .gitignore
 
-Make sure `.env` and `.env.local` files are in `.gitignore` (they already are ✅)
+Make sure `.env` and `.env.local` files are in `.gitignore` 
 
 ---
 
-## 🚀 Deploying to Vercel
+## Deploying to Vercel
 
-### Option 1: Deploy Everything to Vercel (Recommended)
+### Option 1: Deploy Everything to Vercel 
 
 1. **Push to GitHub:**
    ```bash
@@ -77,7 +77,7 @@ Then update `NEXT_PUBLIC_API_URL` in Vercel to your Railway/Render URL.
 
 ---
 
-## 📝 GitHub Setup
+## GitHub Setup
 
 ### Initial Setup:
 
@@ -105,22 +105,7 @@ git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
 # Push to GitHub
 git branch -M main
 git push -u origin main
-```
 
-### Important Notes:
-
-✅ **Protected Files (in .gitignore):**
-- `muc_yt/.env` - Contains your API key
-- `ytcomm_monitor/.env.local` - Contains your API key
-- All `.env*` files
-
-✅ **Safe to Commit:**
-- All source code files
-- `.env.example` files (template without real keys)
-- `requirements.txt`
-- `package.json`
-
----
 
 ## 🔧 Local Development
 
@@ -142,7 +127,7 @@ Visit `http://localhost:3000`
 
 ---
 
-## ✨ Quick Checklist
+##  Quick Checklist
 
 - [ ] Create `.env` in `muc_yt/` with `MINO_API_KEY`
 - [ ] Create `.env.local` in `ytcomm_monitor/` with `MINO_API_KEY`
@@ -151,9 +136,8 @@ Visit `http://localhost:3000`
 - [ ] Deploy to Vercel with environment variables
 - [ ] Test the deployed app
 
----
 
-## 🆘 Troubleshooting
+## Troubleshooting
 
 **API Key exposed?**
 - Immediately regenerate your API key at Mino AI
