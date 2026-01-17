@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
         residential: true,
       },
       wait_for: "#comments, .ytd-comments-container",
-      extra_delay: 8000,
+      extra_delay: 3000, // Reduced from 8000ms to try to fit within 10s timeout
       human_delay: true,
     };
 
