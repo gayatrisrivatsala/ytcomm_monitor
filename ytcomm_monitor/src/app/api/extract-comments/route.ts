@@ -1,7 +1,116 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 120; // 2 minutes for Vercel Pro, 10s for Hobby
+export const maxDuration = 120; // allow enough time for scraping + HF
+
+type HFScore = { label: string; score: number };
+type HFResult = HFScore[] | HFScore[][];
+
+const MINO_API_KEY = process.env.MINO_API_KEY;
+const HF_KEY = process.env.HUGGINGFACE_API_KEY;
+const HF_SENTIMENT_MODEL =
+  process.env.HF_SENTIMENT_MODEL ||
+  "cardiffnlp/twitter-roberta-base-sentiment-latest";
+const HF_INTENT_MODEL =
+  process.env.HF_INTENT_MODEL || "facebook/bart-large-mnli";
+
+async function callHF(model: string, payload: unknown) {
+  if (!HF_KEY) return null;
+  // Use the new HF router endpoint (api-inference is deprecated)
+  const res = await fetch(`https://router.huggingface.co/models/${model}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${HF_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      ...((typeof payload === "object" && payload !== null && !Array.isArray(payload))
+        ? payload
+        : { inputs: payload }),
+      options: { wait_for_model: true },
+    }),
+  });
+  if (!res.ok) {
+    console.error("HF error", res.status, await res.text());
+    return null;
+  }
+  return res.json();
+}
+
+function normalizeSentimentResult(result: HFResult | null): Record<string, number> {
+  if (!result) return {};
+  // Handle shape: [{label,score}, ...]
+  if (Array.isArray(result) && result.length && !Array.isArray(result[0])) {
+    const list = result as HFScore[];
+    return Object.fromEntries(list.map((r) => [r.label.toLowerCase(), r.score]));
+  }
+  // Handle shape: [[{label,score}, ...]]
+  if (Array.isArray(result) && result.length && Array.isArray(result[0])) {
+    const list = (result as HFScore[][])[0] || [];
+    return Object.fromEntries(list.map((r) => [r.label.toLowerCase(), r.score]));
+  }
+  return {};
+}
+
+async function classifySentiment(text: string): Promise<string> {
+  if (!text.trim()) return "neutral";
+  const result = (await callHF(HF_SENTIMENT_MODEL, { inputs: text.slice(0, 450) })) as HFResult | null;
+  const scores = normalizeSentimentResult(result);
+  if (Object.keys(scores).length === 0) return "neutral";
+  if ("positive" in scores && "neutral" in scores && "negative" in scores) {
+    return Object.entries(scores).sort((a, b) => b[1] - a[1])[0][0];
+  }
+  return scores.positive >= scores.negative ? "positive" : "negative";
+}
+
+async function classifyIntent(text: string): Promise<string> {
+  if (!text.trim()) return "other";
+  const labels = ["feature request", "complaint", "praise", "question", "other"];
+  const result = (await callHF(HF_INTENT_MODEL, {
+    inputs: text.slice(0, 450),
+    parameters: { candidate_labels: labels, multi_label: false },
+  })) as { labels: string[]; scores: number[] } | null;
+  if (!result || !Array.isArray(result.labels) || !Array.isArray(result.scores)) return "other";
+  const labelScores = result.labels.map((l, i) => [l, result.scores[i]] as [string, number]);
+  return labelScores.sort((a, b) => b[1] - a[1])[0][0] || "other";
+}
+
+async function analyzeComments(comments: any[]) {
+  if (!HF_KEY) {
+    return {
+      comments,
+      sentiment_breakdown: {},
+      intent_breakdown: {},
+      analysis_source: "skipped",
+    };
+  }
+
+  const sentimentCounts: Record<string, number> = { positive: 0, neutral: 0, negative: 0 };
+  const intentCounts: Record<string, number> = {
+    "feature request": 0,
+    complaint: 0,
+    praise: 0,
+    question: 0,
+    other: 0,
+  };
+
+  const enriched = [];
+  for (const c of comments) {
+    const text = c?.full_comment_text || "";
+    const sentiment = await classifySentiment(text);
+    const intent = await classifyIntent(text);
+    sentimentCounts[sentiment] = (sentimentCounts[sentiment] || 0) + 1;
+    intentCounts[intent] = (intentCounts[intent] || 0) + 1;
+    enriched.push({ ...c, sentiment, intent });
+  }
+
+  return {
+    comments: enriched,
+    sentiment_breakdown: sentimentCounts,
+    intent_breakdown: intentCounts,
+    analysis_source: "huggingface",
+  };
+}
 
 export async function GET() {
   return NextResponse.json({ message: "API route is working", status: "ok" });
@@ -19,7 +128,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const MINO_API_KEY = process.env.MINO_API_KEY;
     if (!MINO_API_KEY) {
       return NextResponse.json(
         { detail: "MINO_API_KEY not configured" },
@@ -30,15 +138,16 @@ export async function POST(request: NextRequest) {
     const payload = {
       url: video_url,
       goal:
-        "STEALTH MODE ON. Wait 8 seconds. Scroll down 3x slowly. Click 'View all comments' if shown. Extract TOP 15 comments with MOST likes. For each: username, full_comment_text, like_count, time_posted. Return clean JSON array only.",
+        "STEALTH MODE ON. Wait 12 seconds. If Shorts page, click the comments pill or comments icon to open the comments sheet. If not Shorts, click 'View all comments' if shown. After opening comments, scroll the comments area down 4x slowly. Extract the top 60 comments with the most likes (minimum 15 if fewer). For each: username, full_comment_text, like_count, time_posted. Return clean JSON array only.",
       browser_profile: "stealth",
       proxy_config: {
         enabled: true,
         country_code: "US",
         residential: true,
       },
-      wait_for: "#comments, .ytd-comments-container",
-      extra_delay: 3000, // Reduced from 8000ms to try to fit within 10s timeout
+      wait_for:
+        "#comments, .ytd-comments-container, ytd-item-section-renderer, ytd-reel-watch-end-screen-comments-button-renderer, #comments-button",
+      extra_delay: 12000,
       human_delay: true,
     };
 
@@ -59,7 +168,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Stream and process SSE response
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
 
@@ -78,38 +186,31 @@ export async function POST(request: NextRequest) {
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
-      
-      // Keep the last incomplete line in buffer
       buffer = lines.pop() || "";
 
       for (const line of lines) {
         if (!line.trim()) continue;
-        
+
         if (line.startsWith("data: ")) {
           try {
             const dataStr = line.slice(6).trim();
             if (!dataStr) continue;
-            
+
             const event = JSON.parse(dataStr);
 
-            console.log("Event received:", event.type, event.status);
-
-            // Check for errors
             if (event.status === "error" || event.type === "ERROR") {
               const errorMsg =
                 event.message || event.error || "Unknown error from Mino AI";
-              console.error("Mino AI error:", errorMsg);
               return NextResponse.json(
                 { detail: String(errorMsg) },
                 { status: 500 }
               );
             }
 
-            // Check for completion
             if (event.type === "COMPLETE" && event.status === "COMPLETED") {
               let resultJson = event.resultJson || {};
-              
-              // If resultJson is a string, try to parse it
+              console.log("Raw event.resultJson:", event.resultJson);
+
               if (typeof resultJson === "string") {
                 try {
                   resultJson = JSON.parse(resultJson);
@@ -117,45 +218,50 @@ export async function POST(request: NextRequest) {
                   console.error("Failed to parse resultJson string:", e);
                 }
               }
+              console.log("Parsed resultJson:", resultJson);
 
-              console.log("Result JSON type:", typeof resultJson);
-              console.log("Result JSON:", JSON.stringify(resultJson).substring(0, 500));
-
-              // Handle different response formats
+              let comments: any[] = [];
               if (Array.isArray(resultJson)) {
-                return NextResponse.json({ comments: resultJson });
+                comments = resultJson;
               } else if (
                 resultJson &&
                 typeof resultJson === "object" &&
                 "comments" in resultJson
               ) {
-                return NextResponse.json(resultJson);
+                comments = (resultJson as any).comments || [];
               } else if (resultJson && typeof resultJson === "object") {
-                // Try to find comments in nested structure
-                const comments = 
-                  resultJson.comments || 
+                comments =
+                  (resultJson as any).comments ||
                   (Array.isArray(resultJson) ? resultJson : []);
-                return NextResponse.json({
-                  comments: Array.isArray(comments) ? comments : [],
-                });
-              } else {
-                // Last resort: try to extract from any top-level array
-                const keys = Object.keys(resultJson || {});
-                for (const key of keys) {
-                  const value = resultJson[key];
-                  if (Array.isArray(value) && value.length > 0) {
-                    // Check if it looks like comments (has objects with text/username)
-                    if (value[0] && typeof value[0] === "object") {
-                      return NextResponse.json({ comments: value });
+                // Try to find any array of objects that looks like comments
+                if (!Array.isArray(comments) || comments.length === 0) {
+                  for (const v of Object.values(resultJson)) {
+                    if (Array.isArray(v) && v.length && typeof v[0] === "object") {
+                      const looksLikeComment =
+                        "full_comment_text" in (v[0] as any) ||
+                        "text" in (v[0] as any) ||
+                        "comment" in (v[0] as any);
+                      if (looksLikeComment) {
+                        comments = v as any[];
+                        break;
+                      }
                     }
                   }
                 }
-                console.log("No comments found in result:", resultJson);
-                return NextResponse.json({ comments: [] });
               }
+              if (!Array.isArray(comments)) comments = [];
+
+              const analysis = await analyzeComments(comments);
+
+              return NextResponse.json({
+                comments: analysis.comments,
+                sentiment_breakdown: analysis.sentiment_breakdown,
+                intent_breakdown: analysis.intent_breakdown,
+                analysis_source: analysis.analysis_source,
+                comment_count: comments.length,
+              });
             }
-          } catch (e) {
-            // Continue processing if JSON parse fails
+          } catch {
             continue;
           }
         }
